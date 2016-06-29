@@ -10,11 +10,23 @@ LOCATOR_DB_CREDENTIALS = {
 
 # column values can be a string column name or can be valid sql that can be used in the select fields
 # eg, if the fqdn is separated into separate host/sub/domain columns, you can set the value as a concat:  'host_col': 'concat(hostname,".",subdomain,".",domain)'
+# Locator table example:
+# CREATE TABLE `locator` (
+#  `id` int auto_increment not null primary key,
+#  `environment` varchar(255) not null,
+#  `dbname` varchar(255) NOT NULL,
+#  `hostname` varchar(255) NOT NULL,
+#  `port` int(11) NOT NULL DEFAULT '3306',
+#  `slave_host` varchar(50) DEFAULT NULL,
+#  `slave_port` int(11) DEFAULT NULL
+#);
 LOCATOR_TABLE = {
     # this is the table that can be used to lookup where shards are located
     'tablename': 'locator',
+    # this is the column that uniquely identifies each shard (should be unique)
+    'shardid_col': 'id',
     # this is the schema name of the specific shard (this should be unique)
-    'shardname_col': 'shard',
+    'dbname_col': 'dbname',
     # this is the column that holds the hostname or ip address of the host containing the shard
     'host_col': 'hostname',
     # column that holds the port number for the shard host
@@ -26,16 +38,17 @@ LOCATOR_TABLE = {
     'slave_port_col': "NULL",
     # this is a where clause that gets appended to the select query from the shard locator table
     'where_clause': None
+    # example: 'where_clause': 'where environment = "prod"'
 }
 # The locator query is built as follows, so any values in LOCATOR_TABLE that make this a valid query and return the same number of columns in right order are valid
-# sql = "select " + settings.LOCATOR_TABLE['shardname_col'] + ", " + settings.LOCATOR_TABLE['host_col'] + ", " \
+# sql = "select " + settings.LOCATOR_TABLE['shardid_col'] + ", " + settings.LOCATOR_TABLE['dbname_col'] + ", " + settings.LOCATOR_TABLE['host_col'] + ", " \
 #            + settings.LOCATOR_TABLE['port_col'] + " from " + settings.LOCATOR_TABLE['tablename'] + whereclause
 
 
 
 
 # path to pt-online-schema-change, if it has been installed with a package manger then default should be /usr/local/bin, /usr/bin or /bin
-PT_OSC = '/usr/local/bin/pt-online-schema-change'
+PT_OSC = '/usr/bin/pt-online-schema-change'
 
 # This contains default set of options to send to pt-online-schema-change
 # if the option should not be sent at all, comment it out, if the option is a flag type option (no parameter), set its value to "" (empty string)
@@ -66,6 +79,7 @@ SHARD_DB_CREDENTIALS = {
 
 # this is the credentials for the host that holds the model shard schema
 MODEL_SHARD_DB_CREDENTIALS = {
+    'shard_id': -1,
     'user': 'root',
     'password': '',
     'host': 'localhost',
@@ -100,6 +114,29 @@ AUDITOR_LOGDB_CREDENTIALS = {
     'dbname': 'shard_auditor'
 }
 
+# This options affect shard auditor, and allow ignoring tables and/or columns on a per-host or global basis. For example, the 
+# following options would ignore all columns of test_table1 on all shards. It also would ignore test_col1 and test_col2 columns 
+# of test_table2 on shard testhost:3306 only
+# 
+#SHARD_AUDITOR_SETTINGS = {
+#    'ignore_tables': {
+#        'test_table1': {
+#            'ignore_all': True
+#            }
+#        },
+#    'hosts': {
+#        'testhost:3306': {
+#            'ignore_tables': {
+#                'test_table2': {
+#                    'columns': [ 'test_col1', 'test_col2' ]
+#                   }
+#            },
+#            'ignore_schemas': [
+#                'test_schema1'
+#            ]
+#        }
+#    }
+#}
+
 SHARD_AUDITOR_SETTINGS = {
 }
-

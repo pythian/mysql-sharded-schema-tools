@@ -8,7 +8,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-H', '--host', help="Hostname to filter all shard hosts")
     parser.add_argument('-p', '--port', help="Port to filter all shard hosts")
-    parser.add_argument('--shards', nargs='+', help="Space separate list of shards to audit")
+    parser.add_argument('--shards', type=int, nargs='+', help="Space separate list of shard_id\'s to audit", metavar='SHARD_ID')
     parser.add_argument('--model', help='Model shard schema to override the config')
     parser.add_argument('--status', action='store_true', help='Output status during execution')
 
@@ -36,7 +36,7 @@ def main():
     if settings.LOCATOR_TABLE['where_clause']:
         whereclause = " " + settings.LOCATOR_TABLE['where_clause']
 
-    sql = "select " + settings.LOCATOR_TABLE['shardname_col'] + ", " + settings.LOCATOR_TABLE['host_col'] + ", " \
+    sql = "select " + settings.LOCATOR_TABLE['shardid_col'] + ", " + settings.LOCATOR_TABLE['dbname_col'] + ", " + settings.LOCATOR_TABLE['host_col'] + ", " \
                + settings.LOCATOR_TABLE['port_col'] + " from " + settings.LOCATOR_TABLE['tablename'] + whereclause
     db.execute(sql)
     rows = db.fetchall()
@@ -44,7 +44,7 @@ def main():
         print "No shards were found using the following query: " + sql
         exit()
     for row in rows:
-        shard, host, port = row
+        shard, dbname, host, port = row
         if args.host and args.host != host:
             continue
         if args.port and args.port != port:
@@ -53,7 +53,7 @@ def main():
             continue
         if args.status:
             print "AUDITING: " + shard
-        auditor.audit_schema(settings.SHARD_DB_CREDENTIALS['user'], settings.SHARD_DB_CREDENTIALS['password'], host, shard, port)
+        auditor.audit_schema(settings.SHARD_DB_CREDENTIALS['user'], settings.SHARD_DB_CREDENTIALS['password'], host, dbname, port)
 
 
 

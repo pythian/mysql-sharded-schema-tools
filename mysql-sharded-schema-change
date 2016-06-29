@@ -59,12 +59,13 @@ class AlterManager:
         self.threads = {}
         self.shutdown = False
         self.shards = {}
+        self.filter_shards = {}
         self.interrupt_counter = 0
         self.awaiting_shutdown = False
         self.watcher = None
         self.manager_queues = {}
 
-    def log(self, shard_name, log_lines):
+    def log(self, shard_id, log_lines):
 
         pass
 
@@ -77,9 +78,9 @@ class AlterManager:
         self.watcher.start()
 
         try:
-            if len(self.settings.OPTIONS['filter_shards']) == 0 or (len(self.settings.OPTIONS['filter_shards']) > 0 and self.settings.MODEL_SHARD_DB_CREDENTIALS['dbname'] in self.settings.OPTIONS['filter_shards']):
+            if len(self.settings.OPTIONS['filter_shards']) == 0 or (len(self.settings.OPTIONS['filter_shards']) > 0 and self.settings.MODEL_SHARD_DB_CREDENTIALS['shard_id'] in self.settings.OPTIONS['filter_shards']):
                 mqueue = multiprocessing.Queue()
-                mqueue.put({'shard': self.settings.MODEL_SHARD_DB_CREDENTIALS['dbname'], 'host': self.settings.MODEL_SHARD_DB_CREDENTIALS['host'], 'port': self.settings.MODEL_SHARD_DB_CREDENTIALS['port'], 'slave_host':self.settings.MODEL_SHARD_DB_CREDENTIALS['slave_host'], 'slave_port': self.settings.MODEL_SHARD_DB_CREDENTIALS['slave_port']})
+                mqueue.put({'shard_id': self.settings.MODEL_SHARD_DB_CREDENTIALS['shard_id'], 'db_name': self.settings.MODEL_SHARD_DB_CREDENTIALS['dbname'], 'host': self.settings.MODEL_SHARD_DB_CREDENTIALS['host'], 'port': self.settings.MODEL_SHARD_DB_CREDENTIALS['port'], 'slave_host':self.settings.MODEL_SHARD_DB_CREDENTIALS['slave_host'], 'slave_port': self.settings.MODEL_SHARD_DB_CREDENTIALS['slave_port']})
                 mqueue.put(None)
 
                 # the temporary rewriting of the ignore_errors flag is so that when it gets copied to the process memory for the model shard worker, it will properly throw an error always
@@ -170,12 +171,12 @@ class AlterManager:
         self.shutdown = True
         self.shutdown_watcher()
 
-    def add_shard(self, shard_name, host, port, slave_host=None, slave_port=None):
+    def add_shard(self, shard_id, db_name, host, port, slave_host=None, slave_port=None):
         queue_id = host + ':' + str(port)
         if not queue_id in self.queues:
             self.queues[queue_id] = multiprocessing.Queue()
-        self.shards[shard_name] = {'shard':shard_name, 'host':host, 'port': port, 'slave_host': slave_host, 'slave_port': slave_port}
-        self.queues[queue_id].put({'shard':shard_name, 'host':host, 'port': port, 'slave_host': slave_host, 'slave_port': slave_port})
+        self.shards[shard_id] = {'db_name':db_name, 'host':host, 'port': port, 'slave_host': slave_host, 'slave_port': slave_port}
+        self.queues[queue_id].put({'shard_id': shard_id, 'db_name':db_name, 'host':host, 'port': port, 'slave_host': slave_host, 'slave_port': slave_port})
 
     def load_shard_locations(self):
         dbconn = MySQLdb.connect(host=self.settings.LOCATOR_DB_CREDENTIALS['host'],
@@ -189,7 +190,7 @@ class AlterManager:
         if settings.LOCATOR_TABLE['where_clause']:
             whereclause = " " + settings.LOCATOR_TABLE['where_clause']
 
-        sql = "select " + settings.LOCATOR_TABLE['shardname_col'] + ", " + settings.LOCATOR_TABLE['host_col'] + ", " \
+        sql = "select " + settings.LOCATOR_TABLE['shardid_col'] + ", " + settings.LOCATOR_TABLE['dbname_col'] + ", " + settings.LOCATOR_TABLE['host_col'] + ", " \
                    + settings.LOCATOR_TABLE['port_col'] + ", " + settings.LOCATOR_TABLE['slave_host_col'] + ", " \
                    + settings.LOCATOR_TABLE['slave_port_col'] + " from " + settings.LOCATOR_TABLE['tablename'] + whereclause
         db.execute(sql)
@@ -200,7 +201,7 @@ class AlterManager:
         for row in rows:
             if len(self.settings.OPTIONS['filter_shards']) > 0 and row[0] not in self.settings.OPTIONS['filter_shards']:
                 continue
-            self.add_shard(row[0], row[1], row[2], row[3], row[4])
+            self.add_shard(row[0], row[1], row[2], row[3], row[4], row[5])
 
     def output_state(self):
         if len(self.errors) == 0 and len(self.unknownitems) == 0 and len(self.completed) - 1 == len(self.shards):
@@ -347,7 +348,7 @@ class Worker(multiprocessing.Process):
                 item = self.__queue.get()
                 if item is None:
                     break    # reached end of queue
-                self.response_queue.put(('running', item['shard'], ''))
+                self.response_queue.put(('running', item['shard_id'], ''))
 
                 time.sleep(.2)
                 if self.manager.settings.OPTIONS['mode'] == 'direct':
@@ -369,13 +370,13 @@ class Worker(multiprocessing.Process):
 
 
     def direct(self, item):
-        print "running direct for shard: " + str(item['shard'])
+        print "running direct for shard: " + str(item['shard_id'])
         try:
             dbconn = MySQLdb.connect(host=item['host'],
                                  port=item['port'],
                                  user=self.manager.settings.SHARD_DB_CREDENTIALS['user'],
                                  passwd=self.manager.settings.SHARD_DB_CREDENTIALS['password'],
-                                 db=item['shard'])
+                                 db=item['db_name'])
             db = dbconn.cursor()
             if self.manager.settings.OPTIONS['running_mode'] == 'dry-run':
                 temptable = '_' + self.manager.settings.OPTIONS['tablename'] + '_dry_run'
@@ -396,21 +397,21 @@ class Worker(multiprocessing.Process):
                         if query.strip():
                             db.execute(query)
 
-            self.response_queue.put(('complete', item['shard'], ''))
+            self.response_queue.put(('complete', item['shard_id'], ''))
             dbconn.close()
         except KeyboardInterrupt:
             print "Thread received hard shutdown signal"
             # the alter is in an unknown state at this point, as the query may continue running
-            self.response_queue.put(('unknown', item['shard'], ''))
+            self.response_queue.put(('unknown', item['shard_id'], ''))
             raise
         except Exception as e:
-            self.response_queue.put(('error', item['shard'], e))
+            self.response_queue.put(('error', item['shard_id'], e))
             raise
 
 
     def online(self, item):
         global proc, p1, p2
-        print "running online for shard: " + str(item['shard'])
+        print "running online for shard: " + str(item['shard_id'])
 
         command = self.manager.settings.PT_OSC
         for k,v in self.manager.settings.PT_OSC_OPTIONS.iteritems():
@@ -431,14 +432,14 @@ class Worker(multiprocessing.Process):
                                                                                           self.manager.settings.SHARD_DB_CREDENTIALS['user'],
                                                                                           item['port'],
                                                                                           pipes.quote(self.manager.settings.OPTIONS['online_alter']),
-                                                                                          item['shard'],
+                                                                                          item['db_name'],
                                                                                           self.manager.settings.OPTIONS['tablename'])
 
         command += " --{0}".format(self.manager.settings.OPTIONS['running_mode'])
         print command
         proc = subprocess.Popen(command, stderr=subprocess.PIPE, stdout=subprocess.PIPE, shell=True) #output-producing process
-        p1 = OnlineStdoutConsumer(proc, self.response_queue, "{0}:{1}:{2}:{3}".format(self.host, self.port, self.id, item['shard']))
-        p2 = OnlineStderrConsumer(proc, self.response_queue, "{0}:{1}:{2}:{3}".format(self.host, self.port, self.id, item['shard']))
+        p1 = OnlineStdoutConsumer(proc, self.response_queue, "{0}:{1}:{2}:{3}".format(self.host, self.port, self.id, item['db_name']))
+        p2 = OnlineStderrConsumer(proc, self.response_queue, "{0}:{1}:{2}:{3}".format(self.host, self.port, self.id, item['db_name']))
         try:
             p1.daemon = True
             p1.start()
@@ -449,19 +450,19 @@ class Worker(multiprocessing.Process):
                 time.sleep(.1)
 
             if proc.returncode == 0:
-                self.response_queue.put(('complete', item['shard'], ''))
+                self.response_queue.put(('complete', item['shard_id'], ''))
             else:
-                self.response_queue.put(('error', item['shard'], 'pt-online-schema-change exited with exit code {0}'.format(proc.returncode)))
+                self.response_queue.put(('error', item['shard_id'], 'pt-online-schema-change exited with exit code {0}'.format(proc.returncode)))
 
         except (KeyboardInterrupt, SystemExit), e:
-            self.response_queue.put(('unknown', item['shard'], ''))
+            self.response_queue.put(('unknown', item['shard_id'], ''))
             if p1 and p1.is_alive():
                 p1.join()
             if p2 and p2.is_alive():
                 p2.join()
             raise
         except Exception as e:
-            self.response_queue.put(('error', item['shard'], e))
+            self.response_queue.put(('error', item['shard_id'], e))
             if p1 and p1.is_alive():
                 p1.join()
             if p2 and p2.is_alive():
@@ -520,7 +521,7 @@ def main():
     parser.add_argument('--type', help='Type of operation to run', choices=['alter', 'create', 'drop', 'script'], default='alter')
     parser.add_argument('--mode', help='Set the mode of alter to run the alter directly or use pt-online-schema-change to perform online alter (default defined in settings)', choices=['direct', 'online'])
     parser.add_argument('--ignore-errors', action='store_true', help='Ignore errors on single shards and continue with the DDL operation. Shards that had errors will be listed in a report at the end of the run.')
-    parser.add_argument('--shards', nargs='+', help='Space separated list of shards to run against (used to filter the global list from locator DB). Used for rolling back or resuming changes that have only been partially applied', metavar='SHARD_NAME')
+    parser.add_argument('--shards', type=int, nargs='+', help='Space separated list of shard_id\'s to run against (used to filter the global list from locator DB). Used for rolling back or resuming changes that have only been partially applied', metavar='SHARD_ID')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--dry-run', help='Perform a dry run of the operation on the model shard. No direct DDL change statements will be run, and pt-osc will be run with --dry-run', action='store_true')
     group.add_argument('--execute', help='execute the operation', action='store_true')
@@ -643,6 +644,8 @@ def main():
     elif args.execute:
         settings.OPTIONS['running_mode'] = 'execute'
 
+    if args.shards:
+        settings.OPTIONS['filter_shards'] = args.shards
 
     manager = AlterManager(settings)
     manager.run_alter()
